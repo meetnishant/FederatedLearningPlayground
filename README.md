@@ -254,13 +254,7 @@ It is a **research and engineering playground**.
 
 ---
 
-## Roadmap (Post-MVP)
+## Roadmap
 
-- [x] Asynchronous federated learning (virtual-time event loop, staleness threshold)
-- [x] Staleness-aware aggregation (uniform, inverse-staleness, exponential-decay)
-- [x] Top-k gradient compression + float16/int8 quantization + error feedback
-- [x] Fairness metrics (Gini coefficient, q-FedAvg loss reweighting)
-- [x] Weight divergence + cosine similarity between client updates
-- [x] Governance mode: audit logs, deterministic replay, model lineage
 - [ ] Secure aggregation simulation
 - [ ] Additional datasets (CIFAR-10, Shakespeare)
