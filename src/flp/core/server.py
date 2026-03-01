@@ -6,6 +6,7 @@ import copy
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
 import torch
@@ -14,6 +15,8 @@ from torch.utils.data import DataLoader
 
 from flp.core.aggregator import AggregationResult, FedAvgAggregator
 from flp.core.client import ClientUpdate, FLClient
+from flp.governance.audit import AuditEvent, AuditLog
+from flp.governance.hashing import hash_state_dict
 from flp.metrics.tracker import MetricsTracker
 from flp.privacy.clipping import ClipResult, clip_model_update
 from flp.privacy.dp import DPAccountant, DPRoundRecord, GaussianMechanism
@@ -74,6 +77,10 @@ class FLServer:
         config: Full experiment configuration.
         test_loader: DataLoader for server-side global evaluation.
         device: Torch device used for the global model and evaluation.
+        round_callback: Optional callable invoked after each non-skipped round.
+        audit_log: Optional :class:`~flp.governance.audit.AuditLog` instance.
+            When provided, a cryptographic model hash and full audit event are
+            recorded every round.  Pass ``None`` to disable governance tracking.
     """
 
     def __init__(
@@ -84,6 +91,7 @@ class FLServer:
         test_loader: DataLoader,  # type: ignore[type-arg]
         device: torch.device,
         round_callback: Callable[[RoundSummary], None] | None = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         if len(clients) < 2:
             raise ValueError(
@@ -96,6 +104,7 @@ class FLServer:
         self.test_loader = test_loader
         self.device = device
         self._round_callback = round_callback
+        self._audit_log = audit_log
 
         self.aggregator = FedAvgAggregator()
         self.dropout_sim = DropoutSimulator(
@@ -211,8 +220,33 @@ class FLServer:
                 dropped_ids,
             )
 
+        # ---- Governance: hash model state before any update ----
+        # Computed unconditionally (not inside the audit_log guard) so that
+        # the pre_round_hash is available for the skipped-round audit event.
+        pre_round_hash: str = ""
+        if self._audit_log is not None:
+            pre_round_hash = hash_state_dict(self.model.state_dict())
+
         # ---- All dropped out — skip round ----
         if dropout_result.all_dropped:
+            elapsed = time.perf_counter() - t_start
+            if self._audit_log is not None:
+                self._audit_log.record(AuditEvent(
+                    round_num=round_num,
+                    timestamp_utc=datetime.now(timezone.utc).isoformat(),
+                    selected_clients=selected_ids,
+                    active_clients=[],
+                    dropped_clients=dropped_ids,
+                    pre_round_model_hash=pre_round_hash,
+                    post_round_model_hash=pre_round_hash,  # no update
+                    global_accuracy=0.0,
+                    global_loss=0.0,
+                    num_clients_clipped=0,
+                    dp_epsilon_spent=0.0,
+                    dp_delta_spent=0.0,
+                    elapsed_seconds=round(elapsed, 4),
+                    skipped=True,
+                ))
             return RoundSummary(
                 round_num=round_num,
                 selected_clients=selected_ids,
@@ -221,7 +255,7 @@ class FLServer:
                 aggregation=None,
                 global_accuracy=0.0,
                 global_loss=0.0,
-                elapsed_seconds=time.perf_counter() - t_start,
+                elapsed_seconds=elapsed,
                 skipped=True,
             )
 
@@ -242,6 +276,8 @@ class FLServer:
 
         # ---- Differential privacy: per-client clipping ----
         num_clipped = 0
+        _dp_epsilon = 0.0
+        _dp_delta = 0.0
         if self._dp_mech is not None:
             clipped_updates: list[ClientUpdate] = []
             for u in updates:
@@ -282,12 +318,19 @@ class FLServer:
                 num_clients_clipped=num_clipped,
             )
             self.dp_accountant.record_round(dp_record)  # type: ignore[union-attr]
+            _dp_epsilon = dp_record.epsilon_spent
+            _dp_delta = dp_record.delta_spent
             logger.debug(
                 "Round %d DP: %d/%d updates clipped | noise_std=%.6f",
                 round_num, num_clipped, len(updates), dp_record.noise_std,
             )
 
         self.model.load_state_dict(aggregated_state)
+
+        # ---- Governance: hash model state after aggregation ----
+        post_round_hash: str = ""
+        if self._audit_log is not None:
+            post_round_hash = hash_state_dict(self.model.state_dict())
 
         # ---- Global evaluation ----
         global_eval = self._evaluate_global()
@@ -317,6 +360,27 @@ class FLServer:
             ],
         )
 
+        elapsed = time.perf_counter() - t_start
+
+        # ---- Governance: emit audit event ----
+        if self._audit_log is not None:
+            self._audit_log.record(AuditEvent(
+                round_num=round_num,
+                timestamp_utc=datetime.now(timezone.utc).isoformat(),
+                selected_clients=selected_ids,
+                active_clients=active_ids,
+                dropped_clients=dropped_ids,
+                pre_round_model_hash=pre_round_hash,
+                post_round_model_hash=post_round_hash,
+                global_accuracy=round(global_eval["accuracy"], 6),
+                global_loss=round(global_eval["loss"], 6),
+                num_clients_clipped=num_clipped,
+                dp_epsilon_spent=_dp_epsilon,
+                dp_delta_spent=_dp_delta,
+                elapsed_seconds=round(elapsed, 4),
+                skipped=False,
+            ))
+
         return RoundSummary(
             round_num=round_num,
             selected_clients=selected_ids,
@@ -325,7 +389,7 @@ class FLServer:
             aggregation=agg_result,
             global_accuracy=global_eval["accuracy"],
             global_loss=global_eval["loss"],
-            elapsed_seconds=time.perf_counter() - t_start,
+            elapsed_seconds=elapsed,
         )
 
     # ------------------------------------------------------------------

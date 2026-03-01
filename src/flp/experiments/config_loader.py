@@ -259,6 +259,49 @@ class OutputConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# GovernanceConfig
+# ---------------------------------------------------------------------------
+
+
+class GovernanceConfig(BaseModel):
+    """Governance, auditability, and deterministic-replay settings.
+
+    When ``enabled=True`` the framework records a cryptographic hash of the
+    global model before and after every aggregation step, writes a structured
+    per-round audit log, and produces a ``replay_manifest.json`` that contains
+    everything needed to independently reproduce or audit the run.
+
+    Output layout under ``<output.dir>/<name>/governance/``::
+
+        audit_log.json       — full JSON array of per-round audit events
+        audit_log.jsonl      — same content, one JSON object per line
+        replay_manifest.json — full reproducibility manifest
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Enable governance mode. When True, model hashes are computed every "
+            "round and audit / replay artefacts are written to disk."
+        ),
+    )
+    save_audit_log: bool = Field(
+        True,
+        description=(
+            "Save the per-round audit log (audit_log.json + audit_log.jsonl). "
+            "Only effective when governance.enabled=True."
+        ),
+    )
+    save_replay_manifest: bool = Field(
+        True,
+        description=(
+            "Save the deterministic replay manifest (replay_manifest.json). "
+            "Only effective when governance.enabled=True."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # ExperimentConfig (root)
 # ---------------------------------------------------------------------------
 
@@ -306,6 +349,7 @@ class ExperimentConfig(BaseModel):
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
 
     @field_validator("name")
     @classmethod

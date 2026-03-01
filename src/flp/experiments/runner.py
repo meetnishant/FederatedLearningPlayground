@@ -6,7 +6,6 @@ import json
 import logging
 import random
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
@@ -20,6 +19,9 @@ from flp.core.client import FLClient
 from flp.core.models import build_model
 from flp.core.server import FLServer, RoundSummary
 from flp.experiments.config_loader import ExperimentConfig
+from flp.governance.audit import AuditLog
+from flp.governance.hashing import hash_config, hash_state_dict
+from flp.governance.replay import ReplayManifest, RoundLineageRecord
 from flp.metrics.communication import CommunicationTracker
 from flp.metrics.tracker import MetricsTracker
 from flp.simulation.partitioning import DataPartitioner
@@ -33,7 +35,8 @@ class ExperimentRunner:
 
     Loads the dataset, partitions data across simulated clients, runs all
     federated rounds via :class:`~flp.core.server.FLServer`, and persists
-    metrics, communication cost, plots, and a human-readable summary JSON.
+    metrics, communication cost, plots, a human-readable summary JSON, and
+    (when ``config.governance.enabled``) a full governance package.
 
     Args:
         config: Fully validated experiment configuration.
@@ -81,6 +84,8 @@ class ExperimentRunner:
             self.config.simulation.alpha,
             self.config.simulation.dropout_rate,
         )
+        if self.config.governance.enabled:
+            logger.info("Governance : ENABLED (audit log + replay manifest)")
         logger.info("=" * 60)
 
         # ----- Data -----
@@ -117,10 +122,43 @@ class ExperimentRunner:
         )
 
         # ----- Model -----
-        # Default to CNN for MNIST; architecture could be made configurable later.
         global_model = build_model("cnn")
         n_params = sum(p.numel() for p in global_model.parameters() if p.requires_grad)
         logger.info("Global model: %s | trainable params: %d", type(global_model).__name__, n_params)
+
+        # ----- Governance setup (before any training) -----
+        gov_enabled = self.config.governance.enabled
+        audit_log: AuditLog | None = None
+        replay_manifest: ReplayManifest | None = None
+        config_snapshot = self._build_config_snapshot()
+
+        if gov_enabled:
+            initial_model_hash = hash_state_dict(global_model.state_dict())
+            config_hash = hash_config(config_snapshot)
+            audit_log = AuditLog()
+            replay_manifest = ReplayManifest(
+                config_snapshot=config_snapshot,
+                config_hash=config_hash,
+                experiment_name=self.config.name,
+                seed=self.config.seed,
+            )
+            replay_manifest.set_initial_model(
+                architecture="cnn",
+                num_params=n_params,
+                initial_model_hash=initial_model_hash,
+            )
+            replay_manifest.set_data_info(
+                dataset=self.config.dataset,
+                train_samples=len(train_dataset),  # type: ignore[arg-type]
+                test_samples=len(test_loader.dataset),  # type: ignore[arg-type]
+                partitioning=self.config.simulation.partitioning,
+                alpha=self.config.simulation.alpha,
+                num_clients=self.config.training.num_clients,
+                client_sample_counts=[len(idx) for idx in client_indices],
+            )
+            logger.info(
+                "Governance: initial model hash = %s", initial_model_hash[:20] + "..."
+            )
 
         # ----- Clients -----
         clients = [
@@ -152,6 +190,7 @@ class ExperimentRunner:
             test_loader=test_loader,
             device=self.device,
             round_callback=round_callback,
+            audit_log=audit_log,
         )
 
         # ----- Training -----
@@ -200,6 +239,14 @@ class ExperimentRunner:
                 dp_summary["total_delta"],
                 dp_summary["total_clients_clipped"],
             )
+        if gov_enabled and audit_log is not None:
+            gov_summary = audit_log.summary()
+            logger.info(
+                "Governance — %d events | %d unique model hashes | %d rounds with dropout",
+                gov_summary["num_rounds_recorded"],
+                gov_summary["unique_model_hashes"],
+                gov_summary["num_rounds_with_dropout"],
+            )
         logger.info("=" * 60)
 
         # ----- Persist outputs -----
@@ -215,6 +262,7 @@ class ExperimentRunner:
             dropout_summary=dropout_summary,
             server=server,
             elapsed_seconds=elapsed,
+            config_snapshot=config_snapshot,
         )
         logger.info("Summary saved to %s/summary.json", self.output_dir)
 
@@ -227,6 +275,30 @@ class ExperimentRunner:
             model_path = self.output_dir / "global_model.pt"
             torch.save(server.model.state_dict(), model_path)
             logger.info("Global model saved to %s", model_path)
+
+        # ----- Governance outputs -----
+        if gov_enabled and audit_log is not None and replay_manifest is not None:
+            gov_dir = self.output_dir / "governance"
+
+            # Populate replay manifest with per-round lineage from audit log
+            for event in audit_log.events:
+                replay_manifest.add_round(RoundLineageRecord(
+                    round_num=event.round_num,
+                    selection_seed=self.config.seed + event.round_num * 997,
+                    selected_clients=event.selected_clients,
+                    active_clients=event.active_clients,
+                    pre_round_model_hash=event.pre_round_model_hash,
+                    post_round_model_hash=event.post_round_model_hash,
+                    skipped=event.skipped,
+                ))
+
+            if self.config.governance.save_audit_log:
+                audit_log.save(gov_dir)
+                logger.info("Audit log saved to %s/", gov_dir)
+
+            if self.config.governance.save_replay_manifest:
+                replay_manifest.save(gov_dir)
+                logger.info("Replay manifest saved to %s/replay_manifest.json", gov_dir)
 
         return metrics
 
@@ -267,54 +339,9 @@ class ExperimentRunner:
         )
         return train_dataset, test_loader
 
-    def _save_summary(
-        self,
-        metrics: MetricsTracker,
-        comm_summary: dict[str, object],
-        dropout_summary: dict[str, object],
-        server: FLServer,
-        elapsed_seconds: float,
-    ) -> None:
-        """Write a comprehensive ``summary.json`` to the output directory.
-
-        The summary contains everything needed to understand the experiment
-        outcome without opening the verbose ``metrics.json``:
-
-        - Experiment metadata (name, seed, device, config snapshot)
-        - High-level training results (best/final accuracy, improvement)
-        - Communication cost totals
-        - Dropout statistics
-        - Per-round history (round, accuracy, loss, active_clients, elapsed)
-
-        Args:
-            metrics: Populated metrics tracker from the completed run.
-            comm_summary: Output of :meth:`~flp.metrics.communication.CommunicationTracker.summary`.
-            dropout_summary: Output of :meth:`~flp.simulation.dropout.DropoutMetrics.summary`.
-            server: Completed server (used for round_summaries timing data).
-            elapsed_seconds: Total wall-clock time for the experiment.
-        """
-        training_summary = metrics.summary()
-
-        # Build a per-round history table for quick inspection
-        timing_by_round = {rs.round_num: rs.elapsed_seconds for rs in server.round_summaries}
-        skipped_rounds = {rs.round_num for rs in server.round_summaries if rs.skipped}
-
-        round_history = []
-        for r in metrics.rounds:
-            round_history.append({
-                "round": r.round_num,
-                "global_accuracy": round(r.global_accuracy, 6),
-                "global_loss": round(r.global_loss, 6),
-                "active_clients": r.num_active_clients,
-                "total_samples": r.total_samples,
-                "avg_client_loss": round(r.avg_client_loss, 6),
-                "min_client_accuracy": round(r.min_client_accuracy, 6),
-                "max_client_accuracy": round(r.max_client_accuracy, 6),
-                "elapsed_seconds": round(timing_by_round.get(r.round_num, 0.0), 3),
-            })
-
-        # Config snapshot — serialise as plain dicts
-        config_snapshot = {
+    def _build_config_snapshot(self) -> dict[str, object]:
+        """Build a JSON-serialisable snapshot of the full experiment config."""
+        return {
             "name": self.config.name,
             "seed": self.config.seed,
             "dataset": self.config.dataset,
@@ -343,6 +370,11 @@ class ExperimentRunner:
                 "delta": self.config.privacy.delta,
                 "max_grad_norm": self.config.privacy.max_grad_norm,
             },
+            "governance": {
+                "enabled": self.config.governance.enabled,
+                "save_audit_log": self.config.governance.save_audit_log,
+                "save_replay_manifest": self.config.governance.save_replay_manifest,
+            },
             "output": {
                 "dir": self.config.output.dir,
                 "save_plots": self.config.output.save_plots,
@@ -350,6 +382,37 @@ class ExperimentRunner:
                 "save_model": self.config.output.save_model,
             },
         }
+
+    def _save_summary(
+        self,
+        metrics: MetricsTracker,
+        comm_summary: dict[str, object],
+        dropout_summary: dict[str, object],
+        server: FLServer,
+        elapsed_seconds: float,
+        config_snapshot: dict[str, object] | None = None,
+    ) -> None:
+        """Write a comprehensive ``summary.json`` to the output directory."""
+        training_summary = metrics.summary()
+
+        timing_by_round = {rs.round_num: rs.elapsed_seconds for rs in server.round_summaries}
+        skipped_rounds = {rs.round_num for rs in server.round_summaries if rs.skipped}
+
+        round_history = []
+        for r in metrics.rounds:
+            round_history.append({
+                "round": r.round_num,
+                "global_accuracy": round(r.global_accuracy, 6),
+                "global_loss": round(r.global_loss, 6),
+                "active_clients": r.num_active_clients,
+                "total_samples": r.total_samples,
+                "avg_client_loss": round(r.avg_client_loss, 6),
+                "min_client_accuracy": round(r.min_client_accuracy, 6),
+                "max_client_accuracy": round(r.max_client_accuracy, 6),
+                "elapsed_seconds": round(timing_by_round.get(r.round_num, 0.0), 3),
+            })
+
+        snapshot = config_snapshot if config_snapshot is not None else self._build_config_snapshot()
 
         output: dict[str, object] = {
             "experiment": {
@@ -360,7 +423,7 @@ class ExperimentRunner:
                 "output_dir": str(self.output_dir),
                 "elapsed_seconds": round(elapsed_seconds, 2),
             },
-            "config": config_snapshot,
+            "config": snapshot,
             "results": {
                 "num_rounds_completed": int(training_summary["num_rounds"]),  # type: ignore[arg-type]
                 "num_rounds_skipped": len(skipped_rounds),

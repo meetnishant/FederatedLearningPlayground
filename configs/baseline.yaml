@@ -99,6 +99,24 @@ privacy:
   max_grad_norm: 1.0
 
 
+# Governance
+# ----------
+# enabled              : set to true to activate governance mode.
+#                        Records a cryptographic SHA-256 hash of the global
+#                        model before and after every aggregation step,
+#                        produces a per-round audit log, and writes a
+#                        replay_manifest.json with all metadata needed to
+#                        independently reproduce or audit this run.
+# save_audit_log       : write audit_log.json + audit_log.jsonl under
+#                        <output_dir>/<name>/governance/.
+# save_replay_manifest : write replay_manifest.json under the same directory.
+
+governance:
+  enabled: false
+  save_audit_log: true
+  save_replay_manifest: true
+
+
 # Output
 # ------
 # dir          : root output directory. Experiment artefacts are written to
