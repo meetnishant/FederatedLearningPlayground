@@ -16,6 +16,7 @@ FLP is a **research and engineering sandbox** for federated learning — not a p
 | Differential privacy | Gaussian mechanism with L2 gradient clipping |
 | Aggregation strategies | FedAvg with weighted sample averaging |
 | Reproducibility | Deterministic seeds + YAML-driven configs |
+| Auditability & governance | SHA-256 model hash chain, round audit log, replay manifest |
 
 ---
 
@@ -62,7 +63,8 @@ FederatedLearningPlayground/
 │   │   ├── client.py               # FLClient: local training + weight sync
 │   │   ├── server.py               # FLServer: round orchestration
 │   │   ├── aggregator.py           # FedAvg weighted aggregation
-│   │   └── trainer.py              # LocalTrainer: SGD loop + evaluation
+│   │   ├── trainer.py              # LocalTrainer: SGD loop + evaluation
+│   │   └── models.py               # MNISTNet CNN definition
 │   ├── simulation/
 │   │   ├── partitioning.py         # IID / Dirichlet / Shard data splits
 │   │   ├── dropout.py              # Per-round client dropout
@@ -76,6 +78,10 @@ FederatedLearningPlayground/
 │   ├── experiments/
 │   │   ├── config_loader.py        # Pydantic-validated YAML config models
 │   │   └── runner.py               # End-to-end experiment orchestration
+│   ├── governance/
+│   │   ├── audit.py                # AuditEvent + AuditLog (JSON/JSONL)
+│   │   ├── hashing.py              # SHA-256 model and config hashing
+│   │   └── replay.py               # ReplayManifest + RoundLineageRecord
 │   └── visualization/
 │       └── plots.py                # Matplotlib plots (accuracy, loss, heatmap)
 └── tests/
@@ -83,7 +89,9 @@ FederatedLearningPlayground/
     ├── test_partitioning.py
     ├── test_dropout.py
     ├── test_metrics.py
-    └── test_config_loader.py
+    ├── test_config_loader.py
+    ├── test_governance.py          # Hashing, AuditLog, ReplayManifest
+    └── test_regulatory.py          # 15 banking/finance compliance scenarios
 ```
 
 ---
@@ -122,6 +130,11 @@ privacy:
   delta: 1.0e-5            # Failure probability
   max_grad_norm: 1.0       # L2 clipping norm
 
+governance:
+  enabled: false           # Enable governance mode
+  save_audit_log: true     # Write audit_log.json + audit_log.jsonl
+  save_replay_manifest: true  # Write replay_manifest.json
+
 output:
   dir: outputs             # Root output directory
   save_plots: true         # Save PNG plots
@@ -137,12 +150,19 @@ After a run, outputs are written to `outputs/<experiment_name>/`:
 
 ```
 outputs/baseline_fedavg/
+├── summary.json                    # Top-level experiment report (always written)
 ├── metrics.json                    # Full round-by-round metrics
-└── plots/
-    ├── global_accuracy.png         # Global test accuracy per round
-    ├── global_loss.png             # Global test loss per round
-    ├── per_client_accuracy.png     # Per-client accuracy heatmap
-    └── client_participation.png    # Active clients per round (bar chart)
+├── communication.json              # Upload/download byte accounting
+├── global_model.pt                 # Final model weights (if save_model: true)
+├── plots/
+│   ├── global_accuracy.png         # Global test accuracy per round
+│   ├── global_loss.png             # Global test loss per round
+│   ├── per_client_accuracy.png     # Per-client accuracy heatmap
+│   └── client_participation.png    # Active clients per round (bar chart)
+└── governance/                     # Written when governance.enabled: true
+    ├── audit_log.json              # All round events as a JSON array
+    ├── audit_log.jsonl             # Same events, one JSON object per line
+    └── replay_manifest.json        # Full reproducibility manifest
 ```
 
 ---
@@ -201,5 +221,5 @@ It is a **research and engineering playground**.
 - [ ] Secure aggregation simulation
 - [ ] Top-k gradient compression
 - [ ] Fairness metrics (q-FedAvg)
-- [ ] Governance mode: audit logs, deterministic replay, model lineage
+- [x] Governance mode: audit logs, deterministic replay, model lineage
 - [ ] Additional datasets (CIFAR-10, Shakespeare)

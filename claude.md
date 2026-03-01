@@ -62,10 +62,11 @@ Must support:
 ## Architecture Overview
 src/flp/
 core/
-client.py
-server.py
-aggregator.py
-trainer.py
+    client.py
+    server.py
+    aggregator.py
+    trainer.py
+    models.py
 simulation/
     partitioning.py
     dropout.py
@@ -86,6 +87,11 @@ experiments/
 visualization/
     plots.py
 
+governance/
+    audit.py
+    hashing.py
+    replay.py
+
 
 ---
 
@@ -95,10 +101,7 @@ visualization/
 - Secure aggregation simulation
 - Gradient compression (Top-k)
 - Fairness metrics
-- Governance mode:
-    - Audit logs per round
-    - Deterministic replay
-    - Model lineage metadata
+- ~~Governance mode~~ — **Implemented**: audit logs, deterministic replay, model lineage metadata
 
 ---
 
