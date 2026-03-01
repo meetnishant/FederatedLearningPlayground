@@ -1,0 +1,37 @@
+# ============================================================
+# FLP — Strict Non-IID Experiment
+# ============================================================
+# Extreme data heterogeneity via low Dirichlet alpha + dropout.
+# ============================================================
+
+name: noniid_strict
+seed: 0
+dataset: mnist
+data_dir: ~/.flp/data
+
+training:
+  num_rounds: 30
+  num_clients: 20
+  client_fraction: 0.3    # 6 clients per round
+
+client:
+  batch_size: 16
+  local_epochs: 5
+  lr: 0.005
+  momentum: 0.9
+  weight_decay: 0.0001
+
+simulation:
+  partitioning: dirichlet
+  alpha: 0.05             # Extreme non-IID
+  num_shards_per_client: 2
+  dropout_rate: 0.2       # 20% chance each client drops per round
+
+privacy:
+  enabled: false
+
+output:
+  dir: outputs
+  save_plots: true
+  save_metrics: true
+  save_model: false

@@ -1,0 +1,40 @@
+# ============================================================
+# FLP — Differentially Private FedAvg Experiment
+# ============================================================
+# Explores the accuracy/privacy trade-off with Gaussian DP.
+# ============================================================
+
+name: dp_fedavg
+seed: 42
+dataset: mnist
+data_dir: ~/.flp/data
+
+training:
+  num_rounds: 20
+  num_clients: 10
+  client_fraction: 0.5
+
+client:
+  batch_size: 32
+  local_epochs: 1
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+
+simulation:
+  partitioning: dirichlet
+  alpha: 0.5
+  num_shards_per_client: 2
+  dropout_rate: 0.0
+
+privacy:
+  enabled: true
+  epsilon: 1.0
+  delta: 0.00001
+  max_grad_norm: 1.0
+
+output:
+  dir: outputs
+  save_plots: true
+  save_metrics: true
+  save_model: false

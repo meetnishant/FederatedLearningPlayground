@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# FLP outputs
+outputs/
+
+# Data cache
+~/.flp/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Mypy
+.mypy_cache/
+
+# Claude Code local config
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store

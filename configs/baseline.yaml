@@ -1,0 +1,63 @@
+# ============================================================
+# FLP Baseline Experiment Configuration
+# ============================================================
+# Run with:  flp run --config configs/baseline.yaml
+# ============================================================
+
+name: baseline_fedavg
+seed: 42
+dataset: mnist
+data_dir: ~/.flp/data
+
+# ---------------------------
+# Federated Training
+# ---------------------------
+training:
+  num_rounds: 20          # Total communication rounds
+  num_clients: 10         # Simulated clients
+  client_fraction: 0.5    # Fraction selected per round (5 of 10)
+
+# ---------------------------
+# Client-Side Training
+# ---------------------------
+client:
+  batch_size: 32
+  local_epochs: 2         # Local SGD epochs per round
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+
+# ---------------------------
+# Simulation
+# ---------------------------
+simulation:
+  # Partitioning strategy: iid | dirichlet | shard
+  partitioning: dirichlet
+
+  # Dirichlet concentration: lower = more heterogeneous (non-IID)
+  # Typical values: 0.1 (extreme non-IID), 0.5 (moderate), 10.0 (near-IID)
+  alpha: 0.5
+
+  # Used only when partitioning: shard
+  num_shards_per_client: 2
+
+  # Probability each selected client drops out per round (0.0 = no dropout)
+  dropout_rate: 0.1
+
+# ---------------------------
+# Differential Privacy
+# ---------------------------
+privacy:
+  enabled: false          # Set to true to activate DP-FedAvg
+  epsilon: 1.0            # Privacy budget (smaller = stronger privacy)
+  delta: 0.00001          # Failure probability
+  max_grad_norm: 1.0      # L2 clipping norm for updates
+
+# ---------------------------
+# Output
+# ---------------------------
+output:
+  dir: outputs            # Root output directory
+  save_plots: true        # Save matplotlib PNG plots
+  save_metrics: true      # Save metrics.json
+  save_model: false       # Save final global model checkpoint
