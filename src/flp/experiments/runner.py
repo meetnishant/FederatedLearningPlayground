@@ -212,7 +212,7 @@ class ExperimentRunner:
 
         if self.config.output.save_plots:
             plots_dir = self.output_dir / "plots"
-            save_all_plots(metrics, str(plots_dir))
+            save_all_plots(metrics, str(plots_dir), comm_tracker=comm_tracker)
             logger.info("Plots saved to %s/", plots_dir)
 
         if self.config.output.save_model:
