@@ -6,7 +6,7 @@ import copy
 import logging
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import torch
 import torch.nn as nn
@@ -81,6 +81,7 @@ class FLServer:
         config: ExperimentConfig,
         test_loader: DataLoader,  # type: ignore[type-arg]
         device: torch.device,
+        round_callback: Callable[[RoundSummary], None] | None = None,
     ) -> None:
         if len(clients) < 2:
             raise ValueError(
@@ -92,6 +93,7 @@ class FLServer:
         self.config = config
         self.test_loader = test_loader
         self.device = device
+        self._round_callback = round_callback
 
         self.aggregator = FedAvgAggregator()
         self.dropout_sim = DropoutSimulator(
@@ -144,6 +146,9 @@ class FLServer:
                 len(summary.selected_clients),
                 summary.elapsed_seconds,
             )
+
+            if self._round_callback is not None:
+                self._round_callback(summary)
 
         logger.info("Federated training complete.")
         return self.metrics
