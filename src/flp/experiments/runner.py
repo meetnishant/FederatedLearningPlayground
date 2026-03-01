@@ -192,6 +192,14 @@ class ExperimentRunner:
             dropout_summary["overall_dropout_rate"] * 100,
             dropout_summary["total_skipped_rounds"],
         )
+        if server.dp_accountant is not None:
+            dp_summary = server.dp_accountant.summary()
+            logger.info(
+                "Privacy   — total ε=%.4f | total δ=%.2e | clipped updates: %d",
+                dp_summary["total_epsilon"],
+                dp_summary["total_delta"],
+                dp_summary["total_clients_clipped"],
+            )
         logger.info("=" * 60)
 
         # ----- Persist outputs -----

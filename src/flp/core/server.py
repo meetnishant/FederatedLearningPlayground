@@ -15,6 +15,8 @@ from torch.utils.data import DataLoader
 from flp.core.aggregator import AggregationResult, FedAvgAggregator
 from flp.core.client import ClientUpdate, FLClient
 from flp.metrics.tracker import MetricsTracker
+from flp.privacy.clipping import ClipResult, clip_model_update
+from flp.privacy.dp import DPAccountant, DPRoundRecord, GaussianMechanism
 from flp.simulation.dropout import DropoutSimulator
 
 if TYPE_CHECKING:
@@ -102,6 +104,28 @@ class FLServer:
         )
         self.metrics = MetricsTracker()
         self._round_summaries: list[RoundSummary] = []
+
+        # ----- Differential privacy -----
+        self._dp_mech: GaussianMechanism | None = None
+        self.dp_accountant: DPAccountant | None = None
+        if config.privacy.enabled:
+            self._dp_mech = GaussianMechanism(
+                epsilon=config.privacy.epsilon,
+                delta=config.privacy.delta,
+                clip_norm=config.privacy.max_grad_norm,
+                seed=config.seed,
+            )
+            self.dp_accountant = DPAccountant(
+                epsilon_per_round=config.privacy.epsilon,
+                delta_per_round=config.privacy.delta,
+            )
+            logger.info(
+                "DP enabled: ε=%.4f | δ=%.2e | clip_norm=%.2f | σ=%.4f",
+                config.privacy.epsilon,
+                config.privacy.delta,
+                config.privacy.max_grad_norm,
+                self._dp_mech.noise_std,
+            )
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -216,9 +240,54 @@ class FLServer:
                 update.train_result.loss,
             )
 
+        # ---- Differential privacy: per-client clipping ----
+        num_clipped = 0
+        if self._dp_mech is not None:
+            clipped_updates: list[ClientUpdate] = []
+            for u in updates:
+                clip_result: ClipResult = clip_model_update(
+                    global_state, u.state_dict, self._dp_mech.clip_norm
+                )
+                if clip_result.was_clipped:
+                    num_clipped += 1
+                    logger.debug(
+                        "  Client %d clipped: norm %.4f → %.4f (scale=%.4f)",
+                        u.client_id,
+                        clip_result.original_norm,
+                        clip_result.clipped_norm,
+                        clip_result.scale,
+                    )
+                clipped_updates.append(
+                    ClientUpdate(
+                        client_id=u.client_id,
+                        state_dict=clip_result.state_dict,
+                        num_samples=u.num_samples,
+                        train_result=u.train_result,
+                    )
+                )
+            updates = clipped_updates
+
         # ---- Aggregate ----
         agg_result = self.aggregator.aggregate(updates)
-        self.model.load_state_dict(agg_result.state_dict)
+
+        # ---- Differential privacy: Gaussian noise injection ----
+        aggregated_state = agg_result.state_dict
+        if self._dp_mech is not None:
+            aggregated_state = self._dp_mech.add_noise(
+                aggregated_state, num_clients=len(updates)
+            )
+            dp_record: DPRoundRecord = self._dp_mech.make_round_record(
+                round_num=round_num,
+                num_clients_total=len(updates),
+                num_clients_clipped=num_clipped,
+            )
+            self.dp_accountant.record_round(dp_record)  # type: ignore[union-attr]
+            logger.debug(
+                "Round %d DP: %d/%d updates clipped | noise_std=%.6f",
+                round_num, num_clipped, len(updates), dp_record.noise_std,
+            )
+
+        self.model.load_state_dict(aggregated_state)
 
         # ---- Global evaluation ----
         global_eval = self._evaluate_global()
