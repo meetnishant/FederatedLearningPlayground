@@ -278,6 +278,22 @@ class AsyncFLServer(FLServer):
                 ))
             updates = clipped_updates
 
+        # ---- Compression (optional) ----
+        if self._compressor is not None:
+            compressed_list: list[ClientUpdate] = []
+            c_ratios: list[float] = []
+            for u in updates:
+                c_update, ratio = self._compressor.compress(u)
+                compressed_list.append(c_update)
+                c_ratios.append(ratio)
+            updates = compressed_list
+            logger.debug(
+                "Round %d: compression ratio=%.3f (strategy=%s)",
+                round_num,
+                sum(c_ratios) / len(c_ratios),
+                self.config.compression.strategy,
+            )
+
         # ---- Aggregate ----
         agg_result: AggregationResult = self.aggregator.aggregate(updates, weights=agg_weights)
         aggregated_state = agg_result.state_dict

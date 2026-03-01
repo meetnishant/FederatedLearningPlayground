@@ -408,6 +408,13 @@ class ExperimentRunner:
                 "staleness_strategy": self.config.async_fl.staleness_strategy,
                 "staleness_decay_factor": self.config.async_fl.staleness_decay_factor,
             },
+            "compression": {
+                "enabled": self.config.compression.enabled,
+                "strategy": self.config.compression.strategy,
+                "topk_ratio": self.config.compression.topk_ratio,
+                "quantization_bits": self.config.compression.quantization_bits,
+                "error_feedback": self.config.compression.error_feedback,
+            },
         }
 
     def _save_summary(

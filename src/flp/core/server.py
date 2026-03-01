@@ -114,6 +114,23 @@ class FLServer:
         self.metrics = MetricsTracker()
         self._round_summaries: list[RoundSummary] = []
 
+        # ----- Gradient compression -----
+        self._compressor = None
+        if config.compression.enabled:
+            from flp.compression import GradientCompressor
+            self._compressor = GradientCompressor(
+                config=config.compression,
+                all_client_ids=[c.client_id for c in clients],
+            )
+            logger.info(
+                "Compression: strategy=%s%s | error_feedback=%s",
+                config.compression.strategy,
+                f" topk_ratio={config.compression.topk_ratio}"
+                if config.compression.strategy == "topk"
+                else f" bits={config.compression.quantization_bits}",
+                config.compression.error_feedback,
+            )
+
         # ----- Differential privacy -----
         self._dp_mech: GaussianMechanism | None = None
         self.dp_accountant: DPAccountant | None = None
@@ -302,6 +319,22 @@ class FLServer:
                     )
                 )
             updates = clipped_updates
+
+        # ---- Compression (optional) ----
+        if self._compressor is not None:
+            compressed: list[ClientUpdate] = []
+            ratios: list[float] = []
+            for u in updates:
+                c_update, ratio = self._compressor.compress(u)
+                compressed.append(c_update)
+                ratios.append(ratio)
+            updates = compressed
+            logger.debug(
+                "Round %d: compression ratio=%.3f (strategy=%s)",
+                round_num,
+                sum(ratios) / len(ratios),
+                self.config.compression.strategy,
+            )
 
         # ---- Aggregate ----
         agg_result = self.aggregator.aggregate(updates)

@@ -259,6 +259,72 @@ class OutputConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# CompressionConfig
+# ---------------------------------------------------------------------------
+
+
+class CompressionConfig(BaseModel):
+    """Gradient compression settings to reduce communication cost.
+
+    When ``enabled=True``, every client update's state dict is compressed
+    by the server before aggregation using the chosen strategy.
+
+    Strategies:
+
+    - **topk**: Top-k sparsification.  Retains only the ``topk_ratio``
+      fraction of float elements with the largest absolute magnitudes and
+      zeroes the rest.
+    - **quantization**: Reduces precision to float16 or int8.  The update
+      is quantized and immediately de-quantized (simulating precision loss),
+      so all arithmetic remains in float32.
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Enable compression. When False all other compression fields are ignored.",
+    )
+    strategy: Literal["topk", "quantization"] = Field(
+        "topk",
+        description=(
+            "Compression strategy. "
+            "'topk': keep top-k% by magnitude (sparse). "
+            "'quantization': reduce precision to float16 or int8."
+        ),
+    )
+    topk_ratio: UnitFraction = Field(
+        0.1,
+        description=(
+            "Fraction of float elements to keep in top-k sparsification. "
+            "Must be in (0, 1]. 0.1 keeps the top 10% by magnitude."
+        ),
+    )
+    quantization_bits: Literal[8, 16] = Field(
+        16,
+        description=(
+            "Target bit-width for quantization. "
+            "16 → float16 (2× compression), 8 → int8 (4× compression)."
+        ),
+    )
+    error_feedback: bool = Field(
+        False,
+        description=(
+            "Enable error feedback (residual accumulation) for top-k compression. "
+            "Carries dropped gradient signal forward to the next round, improving "
+            "convergence. Only valid when strategy='topk'."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def error_feedback_requires_topk(self) -> "CompressionConfig":
+        if self.error_feedback and self.strategy != "topk":
+            raise ValueError(
+                "compression.error_feedback=True requires strategy='topk'. "
+                f"Got strategy='{self.strategy}'."
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
 # AsyncConfig
 # ---------------------------------------------------------------------------
 
@@ -437,6 +503,7 @@ class ExperimentConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
     async_fl: AsyncConfig = Field(default_factory=AsyncConfig)
+    compression: CompressionConfig = Field(default_factory=CompressionConfig)
 
     @field_validator("name")
     @classmethod
@@ -569,6 +636,8 @@ def _validation_hint(error: dict[str, Any]) -> str:
         "name": "Use snake_case or kebab-case, e.g. name: my_experiment.",
         "async_fl.delay_max": "Must be > 0. Try delay_max: 3.0 for up to 3-round delays.",
         "async_fl.staleness_threshold": "Try 3. Higher values accept older updates.",
+        "compression.topk_ratio": "Use a value in (0, 1], e.g. 0.1 to keep the top 10%.",
+        "compression.quantization_bits": "Use 8 (4× compression) or 16 (2× compression).",
     }
 
     if loc in hints:
