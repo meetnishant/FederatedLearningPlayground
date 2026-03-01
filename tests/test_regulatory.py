@@ -753,7 +753,7 @@ class TestReproducibilityVerification:
         m.save(tmp_path)
         data = json.loads((tmp_path / "replay_manifest.json").read_text())
         assert "schema_version" in data
-        assert data["schema_version"] == "1.0"
+        assert data["schema_version"] == "1.1"
 
     def test_round_lineage_count_matches_training_schedule(self, tmp_path: Path) -> None:
         """Number of lineage records must equal num_rounds in the config."""

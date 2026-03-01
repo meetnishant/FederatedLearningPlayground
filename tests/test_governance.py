@@ -381,7 +381,7 @@ def _make_manifest() -> ReplayManifest:
 class TestReplayManifest:
     def test_to_dict_schema_version(self) -> None:
         d = _make_manifest().to_dict()
-        assert d["schema_version"] == "1.0"
+        assert d["schema_version"] == "1.1"
 
     def test_to_dict_experiment_fields(self) -> None:
         d = _make_manifest().to_dict()
@@ -519,7 +519,7 @@ class TestReplayManifest:
         m = _make_manifest()
         m.save(tmp_path)
         data = json.loads((tmp_path / "replay_manifest.json").read_text())
-        assert data["schema_version"] == "1.0"
+        assert data["schema_version"] == "1.1"
 
     def test_save_roundtrip_round_lineage(self, tmp_path: Path) -> None:
         m = _make_manifest()

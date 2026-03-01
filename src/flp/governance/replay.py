@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import socket
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from typing import Any
 
 import torch
 
-_SCHEMA_VERSION = "1.0"
+_SCHEMA_VERSION = "1.1"
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +103,7 @@ class ReplayManifest:
         self._model_info: dict[str, Any] = {}
         self._data_info: dict[str, Any] = {}
         self._round_lineage: list[RoundLineageRecord] = []
+        self._features: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Builders
@@ -165,13 +167,49 @@ class ReplayManifest:
         """
         self._round_lineage.append(record)
 
+    def set_feature_flags(self, config: Any) -> None:
+        """Capture which Phase-2 features were active in this experiment.
+
+        Extracts ``async_fl``, ``compression``, and ``privacy`` settings from
+        the config and records them in a top-level ``features`` section of the
+        manifest so reviewers can see at a glance what was enabled without
+        digging through the full config blob.
+
+        Args:
+            config: Fully validated :class:`~flp.experiments.config_loader.ExperimentConfig`
+                instance from the experiment runner.
+        """
+        self._features = {
+            "async_fl": {
+                "enabled": config.async_fl.enabled,
+                "delay_min": config.async_fl.delay_min,
+                "delay_max": config.async_fl.delay_max,
+                "staleness_threshold": config.async_fl.staleness_threshold,
+                "staleness_strategy": config.async_fl.staleness_strategy,
+                "staleness_decay_factor": config.async_fl.staleness_decay_factor,
+            },
+            "compression": {
+                "enabled": config.compression.enabled,
+                "strategy": config.compression.strategy,
+                "topk_ratio": config.compression.topk_ratio,
+                "quantization_bits": config.compression.quantization_bits,
+                "error_feedback": config.compression.error_feedback,
+            },
+            "differential_privacy": {
+                "enabled": config.privacy.enabled,
+                "epsilon": config.privacy.epsilon,
+                "delta": config.privacy.delta,
+                "max_grad_norm": config.privacy.max_grad_norm,
+            },
+        }
+
     # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise the manifest to a JSON-compatible plain dict."""
-        return {
+        d: dict[str, Any] = {
             "schema_version": _SCHEMA_VERSION,
             "generated_at": self.generated_at,
             "experiment": {
@@ -196,6 +234,9 @@ class ReplayManifest:
                 for r in self._round_lineage
             ],
         }
+        if self._features:
+            d["features"] = self._features
+        return d
 
     def save(self, output_dir: Path) -> None:
         """Write the manifest to ``replay_manifest.json``.
@@ -246,4 +287,27 @@ def _capture_environment() -> dict[str, str]:
         "torch_version": torch.__version__,
         "platform": platform.platform(),
         "hostname": hostname,
+        "git_commit_hash": _get_git_commit_hash(),
     }
+
+
+def _get_git_commit_hash() -> str:
+    """Return the current git HEAD commit hash, or ``"unknown"`` if unavailable.
+
+    Uses ``git rev-parse HEAD`` in the working directory.  Returns
+    ``"unknown"`` if git is not installed, the working directory is not a
+    repository, or any other error occurs, so the manifest is always
+    serialisable.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"

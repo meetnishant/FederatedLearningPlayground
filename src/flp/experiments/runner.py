@@ -156,6 +156,7 @@ class ExperimentRunner:
                 num_clients=self.config.training.num_clients,
                 client_sample_counts=[len(idx) for idx in client_indices],
             )
+            replay_manifest.set_feature_flags(self.config)
             logger.info(
                 "Governance: initial model hash = %s", initial_model_hash[:20] + "..."
             )
