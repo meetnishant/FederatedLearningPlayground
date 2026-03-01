@@ -16,7 +16,11 @@ FLP is a **research and engineering sandbox** for federated learning — not a p
 | Differential privacy | Gaussian mechanism with L2 gradient clipping |
 | Aggregation strategies | FedAvg with weighted sample averaging |
 | Reproducibility | Deterministic seeds + YAML-driven configs |
-| Auditability & governance | SHA-256 model hash chain, round audit log, replay manifest |
+| Auditability & governance | SHA-256 model hash chain, round audit log, replay manifest (schema 1.1) |
+| Async federated learning | Virtual-time event loop, per-client delivery delays, staleness threshold |
+| Staleness-aware aggregation | Uniform, inverse-staleness, and exponential-decay weighting strategies |
+| Gradient compression | Top-k sparsification, float16/int8 quantization, error-feedback residuals |
+| Research metrics | Weight divergence, cosine similarity, Gini fairness coefficient, q-FedAvg |
 
 ---
 
@@ -56,15 +60,28 @@ FederatedLearningPlayground/
 ├── configs/
 │   ├── baseline.yaml               # Standard FedAvg experiment
 │   ├── noniid_strict.yaml          # Extreme non-IID with dropout
-│   └── dp_fedavg.yaml              # Differentially private FedAvg
+│   ├── dp_fedavg.yaml              # Differentially private FedAvg
+│   └── async_fedavg.yaml           # Async FL with delivery delays
 ├── src/flp/
 │   ├── cli.py                      # CLI entrypoint (flp run / flp validate-config)
 │   ├── core/
 │   │   ├── client.py               # FLClient: local training + weight sync
-│   │   ├── server.py               # FLServer: round orchestration
-│   │   ├── aggregator.py           # FedAvg weighted aggregation
+│   │   ├── server.py               # FLServer: round orchestration + compression hook
+│   │   ├── aggregator.py           # FedAvg weighted aggregation (custom weights support)
 │   │   ├── trainer.py              # LocalTrainer: SGD loop + evaluation
-│   │   └── models.py               # MNISTNet CNN definition
+│   │   ├── models.py               # MNISTNet CNN definition
+│   │   ├── event_loop.py           # FLEvent + FLEventLoop (virtual-time priority queue)
+│   │   ├── async_server.py         # AsyncFLServer + AsyncRoundSummary
+│   │   └── staleness.py            # StalenessWeighter (uniform/inverse/exponential)
+│   ├── compression/
+│   │   ├── topk.py                 # Top-k sparsification
+│   │   ├── quantization.py         # float16 / int8 quantization
+│   │   ├── error_feedback.py       # Per-client residual accumulation buffer
+│   │   └── __init__.py             # GradientCompressor facade
+│   ├── research/
+│   │   ├── divergence.py           # Weight divergence + cosine similarity
+│   │   ├── fairness.py             # Gini coefficient, fairness metrics, q-FedAvg
+│   │   └── __init__.py
 │   ├── simulation/
 │   │   ├── partitioning.py         # IID / Dirichlet / Shard data splits
 │   │   ├── dropout.py              # Per-round client dropout
@@ -81,11 +98,15 @@ FederatedLearningPlayground/
 │   ├── governance/
 │   │   ├── audit.py                # AuditEvent + AuditLog (JSON/JSONL)
 │   │   ├── hashing.py              # SHA-256 model and config hashing
-│   │   └── replay.py               # ReplayManifest + RoundLineageRecord
+│   │   └── replay.py               # ReplayManifest schema 1.1 (git hash, features)
 │   └── visualization/
 │       └── plots.py                # Matplotlib plots (accuracy, loss, heatmap)
 └── tests/
     ├── test_aggregator.py
+    ├── test_async.py               # FLEventLoop, AsyncFLServer, AsyncConfig (39 tests)
+    ├── test_staleness.py           # StalenessWeighter + aggregator weights (42 tests)
+    ├── test_compression.py         # TopK, quantization, error feedback (45 tests)
+    ├── test_research.py            # Divergence, fairness, q-FedAvg (43 tests)
     ├── test_partitioning.py
     ├── test_dropout.py
     ├── test_metrics.py
@@ -133,7 +154,24 @@ privacy:
 governance:
   enabled: false           # Enable governance mode
   save_audit_log: true     # Write audit_log.json + audit_log.jsonl
-  save_replay_manifest: true  # Write replay_manifest.json
+  save_replay_manifest: true  # Write replay_manifest.json (schema 1.1)
+
+# Async FL — replaces FLServer with AsyncFLServer
+async_fl:
+  enabled: false           # Enable async FL mode
+  delay_min: 0.0           # Min delivery delay in virtual rounds
+  delay_max: 3.0           # Max delivery delay in virtual rounds
+  staleness_threshold: 3   # Discard updates older than N server versions
+  staleness_strategy: uniform  # uniform | inverse_staleness | exponential_decay
+  staleness_decay_factor: 0.9  # Base for exponential decay (when strategy=exponential_decay)
+
+# Gradient compression — applied server-side before aggregation
+compression:
+  enabled: false           # Enable compression
+  strategy: topk           # topk | quantization
+  topk_ratio: 0.1          # Fraction of elements to keep (0.1 = top 10%)
+  quantization_bits: 16    # 16 = float16 (2×), 8 = int8 (4×)
+  error_feedback: false    # Accumulate residuals across rounds (topk only)
 
 output:
   dir: outputs             # Root output directory
@@ -184,6 +222,7 @@ pytest tests/test_aggregator.py   # Single test module
 | `configs/baseline.yaml` | Standard FedAvg, 10 clients, Dirichlet α=0.5, 10% dropout |
 | `configs/noniid_strict.yaml` | 20 clients, α=0.05 (extreme non-IID), 20% dropout |
 | `configs/dp_fedavg.yaml` | DP-FedAvg with ε=1.0, δ=1e-5, L2 clip norm=1.0 |
+| `configs/async_fedavg.yaml` | Async FL with delivery delays up to 3 rounds, inverse-staleness weighting |
 
 ---
 
@@ -217,9 +256,11 @@ It is a **research and engineering playground**.
 
 ## Roadmap (Post-MVP)
 
-- [ ] Asynchronous federated learning
-- [ ] Secure aggregation simulation
-- [ ] Top-k gradient compression
-- [ ] Fairness metrics (q-FedAvg)
+- [x] Asynchronous federated learning (virtual-time event loop, staleness threshold)
+- [x] Staleness-aware aggregation (uniform, inverse-staleness, exponential-decay)
+- [x] Top-k gradient compression + float16/int8 quantization + error feedback
+- [x] Fairness metrics (Gini coefficient, q-FedAvg loss reweighting)
+- [x] Weight divergence + cosine similarity between client updates
 - [x] Governance mode: audit logs, deterministic replay, model lineage
+- [ ] Secure aggregation simulation
 - [ ] Additional datasets (CIFAR-10, Shakespeare)
