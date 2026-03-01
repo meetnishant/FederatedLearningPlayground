@@ -259,6 +259,70 @@ class OutputConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# AsyncConfig
+# ---------------------------------------------------------------------------
+
+
+class AsyncConfig(BaseModel):
+    """Asynchronous federated learning simulation settings.
+
+    When ``enabled=True``, the synchronous server is replaced by
+    :class:`~flp.core.async_server.AsyncFLServer`.  Client updates are
+    assigned a random delivery delay (in virtual rounds) and queued in an
+    event loop.  Each round, the server aggregates all updates whose virtual
+    delivery round has arrived, discarding any that are too stale.
+
+    Key concepts:
+
+    - **model_version**: The server checkpoint a client trained on.
+    - **staleness**: ``current_server_version − model_version``.
+    - **staleness_threshold**: Updates with staleness > threshold are discarded.
+    """
+
+    enabled: bool = Field(
+        False,
+        description=(
+            "Enable async FL mode. When False all other async_fl fields are ignored "
+            "and the standard synchronous FLServer is used."
+        ),
+    )
+    delay_min: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Minimum delivery delay in virtual rounds. "
+            "0.0 means some updates arrive immediately within the same round."
+        ),
+    )
+    delay_max: float = Field(
+        3.0,
+        gt=0.0,
+        description=(
+            "Maximum delivery delay in virtual rounds. Must be > 0. "
+            "Delays are sampled uniformly from [delay_min, delay_max]."
+        ),
+    )
+    staleness_threshold: int = Field(
+        3,
+        ge=0,
+        description=(
+            "Maximum allowed staleness (server_version − model_version). "
+            "Updates exceeding this are discarded before aggregation. "
+            "Set to a large value (e.g. 999) to accept all updates."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def delay_range_valid(self) -> "AsyncConfig":
+        if self.enabled and self.delay_min > self.delay_max:
+            raise ValueError(
+                f"async_fl.delay_min={self.delay_min} must be <= "
+                f"async_fl.delay_max={self.delay_max}."
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
 # GovernanceConfig
 # ---------------------------------------------------------------------------
 
@@ -350,6 +414,7 @@ class ExperimentConfig(BaseModel):
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
+    async_fl: AsyncConfig = Field(default_factory=AsyncConfig)
 
     @field_validator("name")
     @classmethod
@@ -480,6 +545,8 @@ def _validation_hint(error: dict[str, Any]) -> str:
         "client.batch_size": "Common sizes: 16, 32, 64, 128.",
         "seed": "Use any non-negative integer, e.g. seed: 42.",
         "name": "Use snake_case or kebab-case, e.g. name: my_experiment.",
+        "async_fl.delay_max": "Must be > 0. Try delay_max: 3.0 for up to 3-round delays.",
+        "async_fl.staleness_threshold": "Try 3. Higher values accept older updates.",
     }
 
     if loc in hints:

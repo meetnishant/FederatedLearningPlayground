@@ -1,0 +1,66 @@
+# ============================================================
+# FLP Async FedAvg Experiment Configuration
+# ============================================================
+# Run with:
+#   flp run --config configs/async_fedavg.yaml
+#
+# Demonstrates async FL: clients submit updates with random
+# delays (0–3 rounds). The server aggregates whatever arrives
+# each round, discarding updates older than 3 server versions.
+# ============================================================
+
+name: async_fedavg
+seed: 42
+dataset: mnist
+data_dir: ~/.flp/data
+
+training:
+  num_rounds: 20
+  num_clients: 10
+  client_fraction: 0.5
+
+client:
+  batch_size: 32
+  local_epochs: 2
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+
+simulation:
+  partitioning: dirichlet
+  alpha: 0.5
+  num_shards_per_client: 2
+  dropout_rate: 0.1
+
+# Async FL settings
+# -----------------
+# enabled              : switches from synchronous FLServer to AsyncFLServer.
+# delay_min / delay_max: each client update is assigned a random delivery
+#                        delay in [delay_min, delay_max] virtual rounds.
+#                        delay_min=0 means some updates arrive immediately.
+# staleness_threshold  : updates older than this many server versions are
+#                        discarded before aggregation.
+#                        staleness = server_version − model_version_used.
+
+async_fl:
+  enabled: true
+  delay_min: 0.0
+  delay_max: 3.0
+  staleness_threshold: 3
+
+privacy:
+  enabled: false
+  epsilon: 1.0
+  delta: 0.00001
+  max_grad_norm: 1.0
+
+governance:
+  enabled: false
+  save_audit_log: true
+  save_replay_manifest: true
+
+output:
+  dir: outputs
+  save_plots: true
+  save_metrics: true
+  save_model: false

@@ -183,15 +183,33 @@ class ExperimentRunner:
         )
 
         # ----- Server -----
-        server = FLServer(
-            model=global_model,
-            clients=clients,
-            config=self.config,
-            test_loader=test_loader,
-            device=self.device,
-            round_callback=round_callback,
-            audit_log=audit_log,
-        )
+        if self.config.async_fl.enabled:
+            from flp.core.async_server import AsyncFLServer
+            logger.info(
+                "Async FL : ENABLED (delay=[%.1f, %.1f] rounds, staleness_threshold=%d)",
+                self.config.async_fl.delay_min,
+                self.config.async_fl.delay_max,
+                self.config.async_fl.staleness_threshold,
+            )
+            server: FLServer = AsyncFLServer(
+                model=global_model,
+                clients=clients,
+                config=self.config,
+                test_loader=test_loader,
+                device=self.device,
+                round_callback=round_callback,
+                audit_log=audit_log,
+            )
+        else:
+            server = FLServer(
+                model=global_model,
+                clients=clients,
+                config=self.config,
+                test_loader=test_loader,
+                device=self.device,
+                round_callback=round_callback,
+                audit_log=audit_log,
+            )
 
         # ----- Training -----
         metrics = server.run()
@@ -380,6 +398,12 @@ class ExperimentRunner:
                 "save_plots": self.config.output.save_plots,
                 "save_metrics": self.config.output.save_metrics,
                 "save_model": self.config.output.save_model,
+            },
+            "async_fl": {
+                "enabled": self.config.async_fl.enabled,
+                "delay_min": self.config.async_fl.delay_min,
+                "delay_max": self.config.async_fl.delay_max,
+                "staleness_threshold": self.config.async_fl.staleness_threshold,
             },
         }
 
