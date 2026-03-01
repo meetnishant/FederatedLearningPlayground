@@ -186,10 +186,11 @@ class ExperimentRunner:
         if self.config.async_fl.enabled:
             from flp.core.async_server import AsyncFLServer
             logger.info(
-                "Async FL : ENABLED (delay=[%.1f, %.1f] rounds, staleness_threshold=%d)",
+                "Async FL : ENABLED (delay=[%.1f, %.1f] rounds, staleness_threshold=%d, strategy=%s)",
                 self.config.async_fl.delay_min,
                 self.config.async_fl.delay_max,
                 self.config.async_fl.staleness_threshold,
+                self.config.async_fl.staleness_strategy,
             )
             server: FLServer = AsyncFLServer(
                 model=global_model,
@@ -404,6 +405,8 @@ class ExperimentRunner:
                 "delay_min": self.config.async_fl.delay_min,
                 "delay_max": self.config.async_fl.delay_max,
                 "staleness_threshold": self.config.async_fl.staleness_threshold,
+                "staleness_strategy": self.config.async_fl.staleness_strategy,
+                "staleness_decay_factor": self.config.async_fl.staleness_decay_factor,
             },
         }
 

@@ -51,19 +51,30 @@ class FedAvgAggregator:
       ``model.load_state_dict()``.
     """
 
-    def aggregate(self, updates: list[ClientUpdate]) -> AggregationResult:
+    def aggregate(
+        self,
+        updates: list[ClientUpdate],
+        weights: list[float] | None = None,
+    ) -> AggregationResult:
         """Aggregate client updates into a new global model state dict.
 
         Args:
             updates: Non-empty list of :class:`~flp.core.client.ClientUpdate`
                 objects, one per participating client.
+            weights: Optional explicit per-update aggregation weights that must
+                sum to 1.0, one per entry in ``updates``.  When provided these
+                replace the default sample-count-proportional weights, allowing
+                staleness-aware or other custom aggregation schemes.  When
+                ``None`` (default) the standard FedAvg rule is used:
+                ``weight_i = num_samples_i / total_samples``.
 
         Returns:
             :class:`AggregationResult` with the aggregated state dict and
             summary statistics.
 
         Raises:
-            ValueError: If ``updates`` is empty or all sample counts are zero.
+            ValueError: If ``updates`` is empty, all sample counts are zero,
+                or ``weights`` has a different length than ``updates``.
         """
         if not updates:
             raise ValueError(
@@ -78,7 +89,19 @@ class FedAvgAggregator:
                 "Check that clients have non-empty data partitions."
             )
 
+        # Resolve per-update weights.
+        if weights is not None:
+            if len(weights) != len(updates):
+                raise ValueError(
+                    f"weights has {len(weights)} entries but updates has "
+                    f"{len(updates)}. They must match."
+                )
+            effective_weights = weights
+        else:
+            effective_weights = [u.num_samples / total_samples for u in updates]
+
         # Client whose state dict is used as the reference for non-float tensors.
+        # Always based on num_samples regardless of custom weights.
         reference_update = max(updates, key=lambda u: u.num_samples)
         ref_state = reference_update.state_dict
 
@@ -93,11 +116,10 @@ class FedAvgAggregator:
                 aggregated[key] = param.clone()
 
         # Weighted accumulation over float tensors only.
-        for update in updates:
-            weight: float = update.num_samples / total_samples
+        for update, w in zip(updates, effective_weights):
             for key, param in update.state_dict.items():
                 if param.is_floating_point():
-                    aggregated[key] += param.double() * weight
+                    aggregated[key] += param.double() * w
 
         # Cast float64 accumulators back to the original dtype of each tensor.
         final_state: dict[str, torch.Tensor] = {}
@@ -110,8 +132,8 @@ class FedAvgAggregator:
 
         # Weighted training loss across all clients.
         weighted_loss = sum(
-            u.train_result.loss * u.num_samples / total_samples
-            for u in updates
+            u.train_result.loss * w
+            for u, w in zip(updates, effective_weights)
         )
 
         return AggregationResult(

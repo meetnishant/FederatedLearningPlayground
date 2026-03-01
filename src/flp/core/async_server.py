@@ -17,6 +17,7 @@ from flp.core.aggregator import AggregationResult
 from flp.core.client import ClientUpdate, FLClient
 from flp.core.event_loop import FLEvent, FLEventLoop
 from flp.core.server import FLServer, RoundSummary
+from flp.core.staleness import StalenessWeighter
 from flp.governance.audit import AuditEvent, AuditLog
 from flp.governance.hashing import hash_state_dict
 from flp.privacy.clipping import clip_model_update
@@ -125,14 +126,19 @@ class AsyncFLServer(FLServer):
             seed=config.seed,
         )
         self._staleness_threshold: int = async_cfg.staleness_threshold
+        self._staleness_weighter = StalenessWeighter(
+            strategy=async_cfg.staleness_strategy,
+            decay_factor=async_cfg.staleness_decay_factor,
+        )
         self._server_version: int = 0   # increments on each successful aggregation
         self._client_lookup: dict[int, FLClient] = {c.client_id: c for c in clients}
 
         logger.info(
-            "AsyncFLServer: delay=[%.1f, %.1f] rounds | staleness_threshold=%d",
+            "AsyncFLServer: delay=[%.1f, %.1f] rounds | staleness_threshold=%d | strategy=%s",
             async_cfg.delay_min,
             async_cfg.delay_max,
             async_cfg.staleness_threshold,
+            async_cfg.staleness_strategy,
         )
 
     # ------------------------------------------------------------------
@@ -244,6 +250,13 @@ class AsyncFLServer(FLServer):
         active_client_ids = [e.client_id for e in live_events]
         updates: list[ClientUpdate] = [e.update for e in live_events]  # type: ignore[misc]
 
+        # ---- Staleness-aware aggregation weights ----
+        staleness_values = [self._server_version - e.model_version for e in live_events]
+        agg_weights = self._staleness_weighter.compute_weights(
+            staleness_values=staleness_values,
+            num_samples=[u.num_samples for u in updates],
+        )
+
         # ---- DP clipping ----
         num_clipped = 0
         _dp_epsilon = 0.0
@@ -266,7 +279,7 @@ class AsyncFLServer(FLServer):
             updates = clipped_updates
 
         # ---- Aggregate ----
-        agg_result: AggregationResult = self.aggregator.aggregate(updates)
+        agg_result: AggregationResult = self.aggregator.aggregate(updates, weights=agg_weights)
         aggregated_state = agg_result.state_dict
 
         # ---- DP noise ----

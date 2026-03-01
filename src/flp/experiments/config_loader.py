@@ -277,6 +277,8 @@ class AsyncConfig(BaseModel):
     - **model_version**: The server checkpoint a client trained on.
     - **staleness**: ``current_server_version − model_version``.
     - **staleness_threshold**: Updates with staleness > threshold are discarded.
+    - **staleness_strategy**: How accepted updates are weighted relative to
+      their age before FedAvg aggregation.
     """
 
     enabled: bool = Field(
@@ -309,6 +311,26 @@ class AsyncConfig(BaseModel):
             "Maximum allowed staleness (server_version − model_version). "
             "Updates exceeding this are discarded before aggregation. "
             "Set to a large value (e.g. 999) to accept all updates."
+        ),
+    )
+    staleness_strategy: Literal["uniform", "inverse_staleness", "exponential_decay"] = Field(
+        "uniform",
+        description=(
+            "Aggregation weighting strategy for stale-but-accepted updates. "
+            "'uniform': weights proportional to num_samples only (standard FedAvg). "
+            "'inverse_staleness': weight *= 1/(1+staleness). "
+            "'exponential_decay': weight *= staleness_decay_factor**staleness."
+        ),
+    )
+    staleness_decay_factor: float = Field(
+        0.9,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Base for exponential staleness decay. Only used when "
+            "staleness_strategy='exponential_decay'. "
+            "Must be in (0, 1]. A value of 0.9 reduces each stale round's "
+            "influence by 10%."
         ),
     )
 
