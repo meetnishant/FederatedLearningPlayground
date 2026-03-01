@@ -8,12 +8,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torchvision
 import torchvision.transforms as T
 from torch.utils.data import DataLoader
 
 from flp.core.client import FLClient
+from flp.core.models import build_model
 from flp.core.server import FLServer
 from flp.experiments.config_loader import ExperimentConfig
 from flp.metrics.communication import CommunicationTracker
@@ -23,40 +23,6 @@ from flp.visualization.plots import save_all_plots
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Simple CNN for MNIST (baseline model)
-# ---------------------------------------------------------------------------
-
-
-class MNISTNet(nn.Module):
-    """Lightweight CNN for MNIST classification."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-        )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, 10),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.features(x))
-
-
-# ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
 
 
 class ExperimentRunner:
@@ -111,7 +77,7 @@ class ExperimentRunner:
         )
 
         # ----- Model -----
-        global_model: nn.Module = MNISTNet()
+        global_model = build_model("cnn")
 
         # ----- Clients -----
         clients = [
@@ -122,6 +88,7 @@ class ExperimentRunner:
                 model=global_model,
                 config=self.config.client,
                 device=self.device,
+                seed=self.config.seed,
             )
             for i in range(self.config.training.num_clients)
         ]
@@ -139,43 +106,47 @@ class ExperimentRunner:
             device=self.device,
         )
 
-        # Monkey-patch round recording for comm tracking
-        original_run = server.run
+        metrics = server.run()
 
-        def _run_with_comm() -> MetricsTracker:
-            metrics = original_run()
-            for r in metrics.rounds:
-                comm_tracker.record_round(
-                    num_clients_upload=r.num_active_clients,
-                    num_clients_download=self.config.training.num_clients,
-                )
-            return metrics
-
-        metrics = _run_with_comm()
+        # Record comm cost from round_summaries so skipped rounds get 0-upload entries
+        for rs in server.round_summaries:
+            comm_tracker.record_round(
+                round_num=rs.round_num,
+                num_clients_upload=len(rs.active_clients),
+                num_clients_download=len(rs.selected_clients),
+            )
 
         # ----- Summary -----
         summary = metrics.summary()
         comm_summary = comm_tracker.summary()
+        dropout_summary = server.dropout_sim.metrics.summary()
+
         logger.info("=" * 60)
         logger.info("Experiment complete: %s", self.config.name)
         logger.info(
-            "Best accuracy: %.4f | Final accuracy: %.4f | Final loss: %.4f",
+            "Accuracy  — best: %.4f | final: %.4f | improvement: %+.4f",
             summary["best_accuracy"],
             summary["final_accuracy"],
-            summary["final_loss"],
+            summary["accuracy_improvement"],
         )
         logger.info(
-            "Communication: %.2f MB total (up=%.2f MB, down=%.2f MB)",
+            "Communication — %.2f MB total (↑ %.2f MB upload, ↓ %.2f MB download)",
             comm_summary["total_mb"],
             comm_summary["total_upload_mb"],
             comm_summary["total_download_mb"],
+        )
+        logger.info(
+            "Dropout   — overall rate: %.1f%% | skipped rounds: %d",
+            dropout_summary["overall_dropout_rate"] * 100,
+            dropout_summary["total_skipped_rounds"],
         )
 
         # ----- Save outputs -----
         if self.config.output.save_metrics:
             metrics_path = self.output_dir / "metrics.json"
             metrics.save(metrics_path)
-            logger.info("Metrics saved to %s", metrics_path)
+            comm_tracker.save(self.output_dir / "communication.json")
+            logger.info("Metrics saved to %s", self.output_dir)
 
         if self.config.output.save_plots:
             plots_dir = self.output_dir / "plots"

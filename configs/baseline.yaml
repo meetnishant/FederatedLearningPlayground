@@ -1,63 +1,114 @@
 # ============================================================
 # FLP Baseline Experiment Configuration
 # ============================================================
-# Run with:  flp run --config configs/baseline.yaml
+# Run with:
+#   flp run --config configs/baseline.yaml
+#
+# Validate without running:
+#   flp validate-config configs/baseline.yaml
+#
+# Schema reference: src/flp/experiments/config_loader.py
 # ============================================================
+
+# Experiment identity
+# -------------------
+# name       : human-readable label; used as the output sub-directory name.
+#              No spaces — use underscores or hyphens.
+# seed       : global random seed (>= 0). Set once; keep it fixed across runs
+#              to ensure bit-exact reproducibility.
+# dataset    : dataset to load. Only "mnist" is supported in v0.1.
+# data_dir   : where to cache downloaded datasets. ~ expansion is supported.
 
 name: baseline_fedavg
 seed: 42
 dataset: mnist
 data_dir: ~/.flp/data
 
-# ---------------------------
-# Federated Training
-# ---------------------------
-training:
-  num_rounds: 20          # Total communication rounds
-  num_clients: 10         # Simulated clients
-  client_fraction: 0.5    # Fraction selected per round (5 of 10)
 
-# ---------------------------
+# Federated Training
+# ------------------
+# num_rounds       : total communication rounds between server and clients.
+#                    More rounds → better convergence but higher comm cost.
+# num_clients      : total number of simulated clients (>= 2).
+# client_fraction  : fraction of clients sampled per round — (0, 1].
+#                    0.5 means 5 of 10 clients participate each round.
+
+training:
+  num_rounds: 20
+  num_clients: 10
+  client_fraction: 0.5
+
+
 # Client-Side Training
-# ---------------------------
+# --------------------
+# batch_size    : local SGD mini-batch size (>= 1). Powers of two are preferred.
+# local_epochs  : full passes over local data per round (>= 1).
+#                 More epochs → less communication but higher client drift.
+# lr            : SGD learning rate (> 0). Typical range: 0.001–0.1.
+# momentum      : SGD momentum [0, 1].
+# weight_decay  : L2 regularisation coefficient (>= 0).
+
 client:
   batch_size: 32
-  local_epochs: 2         # Local SGD epochs per round
+  local_epochs: 2
   lr: 0.01
   momentum: 0.9
   weight_decay: 0.0001
 
-# ---------------------------
+
 # Simulation
-# ---------------------------
+# ----------
+# partitioning         : how data is split across clients.
+#   "iid"              → uniform random split (homogeneous)
+#   "dirichlet"        → non-IID via Dirichlet distribution (recommended)
+#   "shard"            → deterministic class-shard assignment
+#
+# alpha                : Dirichlet concentration (only used with "dirichlet").
+#   0.05 – 0.1        → extreme non-IID (each client sees ~1–2 classes)
+#   0.5               → moderate heterogeneity  ← this baseline
+#   10.0+             → near-IID
+#
+# num_shards_per_client: shards assigned per client (only used with "shard").
+#
+# dropout_rate         : probability each selected client drops out per round.
+#   0.0               → no dropout (all selected clients always respond)
+#   0.1               → 10% chance per client per round  ← this baseline
+
 simulation:
-  # Partitioning strategy: iid | dirichlet | shard
   partitioning: dirichlet
-
-  # Dirichlet concentration: lower = more heterogeneous (non-IID)
-  # Typical values: 0.1 (extreme non-IID), 0.5 (moderate), 10.0 (near-IID)
   alpha: 0.5
-
-  # Used only when partitioning: shard
   num_shards_per_client: 2
-
-  # Probability each selected client drops out per round (0.0 = no dropout)
   dropout_rate: 0.1
 
-# ---------------------------
-# Differential Privacy
-# ---------------------------
-privacy:
-  enabled: false          # Set to true to activate DP-FedAvg
-  epsilon: 1.0            # Privacy budget (smaller = stronger privacy)
-  delta: 0.00001          # Failure probability
-  max_grad_norm: 1.0      # L2 clipping norm for updates
 
-# ---------------------------
+# Differential Privacy
+# --------------------
+# enabled       : set to true to activate DP-FedAvg (Gaussian mechanism).
+#                 When false all other privacy fields are ignored.
+# epsilon       : privacy budget ε (> 0). Smaller = stronger privacy.
+#                 Common values: 0.1 (strong), 1.0 (moderate), 10.0 (weak).
+# delta         : failure probability δ. Recommended: 1e-5 or smaller.
+#                 Must satisfy 0 < δ < 1.
+# max_grad_norm : L2 clipping norm applied to client updates before
+#                 aggregation. Also used as the DP sensitivity parameter.
+
+privacy:
+  enabled: false
+  epsilon: 1.0
+  delta: 0.00001
+  max_grad_norm: 1.0
+
+
 # Output
-# ---------------------------
+# ------
+# dir          : root output directory. Experiment artefacts are written to
+#                <dir>/<name>/ (e.g. outputs/baseline_fedavg/).
+# save_plots   : save PNG plots (accuracy, loss, heatmap, participation).
+# save_metrics : save per-round metrics to metrics.json.
+# save_model   : save the final global model state dict as global_model.pt.
+
 output:
-  dir: outputs            # Root output directory
-  save_plots: true        # Save matplotlib PNG plots
-  save_metrics: true      # Save metrics.json
-  save_model: false       # Save final global model checkpoint
+  dir: outputs
+  save_plots: true
+  save_metrics: true
+  save_model: false
